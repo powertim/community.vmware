@@ -801,78 +801,80 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         hostnames = self.get_option('hostnames')
 
         for vm_obj in objects:
-            properties = dict()
-            for vm_obj_property in vm_obj.propSet:
-                if vm_obj_property.name in vm_subproperties:
-                    for subproperty in vm_subproperties[vm_obj_property.name]:
-                        subproperty_parts = subproperty.split('.')
+            try:
+                properties = dict()
+                for vm_obj_property in vm_obj.propSet:
+                    if vm_obj_property.name in vm_subproperties:
+                        for subproperty in vm_subproperties[vm_obj_property.name]:
+                            subproperty_parts = subproperty.split('.')
 
-                        value = vm_obj_property.val
-                        for subproperty_part in subproperty_parts:
-                            value = value.__getattribute__(subproperty_part)
+                            value = vm_obj_property.val
+                            for subproperty_part in subproperty_parts:
+                                value = value.__getattribute__(subproperty_part)
 
-                        subproperty_parsed = parse_vim_property(value)
-                        properties[vm_obj_property.name + "." + subproperty] = subproperty_parsed
-                else:
-                    properties[vm_obj_property.name] = vm_obj_property.val
+                            subproperty_parsed = parse_vim_property(value)
+                            properties[vm_obj_property.name + "." + subproperty] = subproperty_parsed
+                    else:
+                        properties[vm_obj_property.name] = vm_obj_property.val
 
-            if (properties.get('runtime.connectionState') or properties['runtime'].connectionState) in ('orphaned', 'inaccessible', 'disconnected'):
-                continue
+                if (properties.get('runtime.connectionState') or properties['runtime'].connectionState) in ('orphaned', 'inaccessible', 'disconnected'):
+                    continue
 
-            # Custom values
-            if 'customValue' in vm_properties:
-                field_mgr = []
-                if self.pyv.content.customFieldsManager:  # not an ESXi
-                    field_mgr = self.pyv.content.customFieldsManager.field
-                for cust_value in vm_obj.obj.customValue:
-                    properties[[y.name for y in field_mgr if y.key == cust_value.key][0]] = cust_value.value
+                # Custom values
+                if 'customValue' in vm_properties:
+                    field_mgr = []
+                    if self.pyv.content.customFieldsManager:  # not an ESXi
+                        field_mgr = self.pyv.content.customFieldsManager.field
+                    for cust_value in vm_obj.obj.customValue:
+                        properties[[y.name for y in field_mgr if y.key == cust_value.key][0]] = cust_value.value
 
-            # Tags
-            if tags_info:
-                # Add virtual machine to appropriate tag group
-                vm_mo_id = vm_obj.obj._GetMoId()  # pylint: disable=protected-access
-                vm_dynamic_id = DynamicID(type='VirtualMachine', id=vm_mo_id)
-                tag_association = self.pyv.rest_content.tagging.TagAssociation
-                properties['tags'] = []
-                properties['categories'] = []
-                properties['tag_category'] = {}
-                for tag_id in tag_association.list_attached_tags(vm_dynamic_id):
-                    if tag_id not in tags_info:
-                        # Ghost Tags - community.vmware#681
-                        continue
-                    # Add tags related to VM
-                    properties['tags'].append(tags_info[tag_id][0])
-                    # Add categories related to VM
-                    properties['categories'].append(tags_info[tag_id][1])
-                    # Add tag and categories related to VM
-                    if tags_info[tag_id][1] not in properties['tag_category']:
-                        properties['tag_category'][tags_info[tag_id][1]] = []
-                    properties['tag_category'][tags_info[tag_id][1]].append(tags_info[tag_id][0])
+                # Tags
+                if tags_info:
+                    # Add virtual machine to appropriate tag group
+                    vm_mo_id = vm_obj.obj._GetMoId()  # pylint: disable=protected-access
+                    vm_dynamic_id = DynamicID(type='VirtualMachine', id=vm_mo_id)
+                    tag_association = self.pyv.rest_content.tagging.TagAssociation
+                    properties['tags'] = []
+                    properties['categories'] = []
+                    properties['tag_category'] = {}
+                    for tag_id in tag_association.list_attached_tags(vm_dynamic_id):
+                        if tag_id not in tags_info:
+                            # Ghost Tags - community.vmware#681
+                            continue
+                        # Add tags related to VM
+                        properties['tags'].append(tags_info[tag_id][0])
+                        # Add categories related to VM
+                        properties['categories'].append(tags_info[tag_id][1])
+                        # Add tag and categories related to VM
+                        if tags_info[tag_id][1] not in properties['tag_category']:
+                            properties['tag_category'][tags_info[tag_id][1]] = []
+                        properties['tag_category'][tags_info[tag_id][1]].append(tags_info[tag_id][0])
 
-            # Path
-            with_path = self.get_option('with_path')
-            if with_path:
-                path = []
-                parent = vm_obj.obj.parent
-                while parent:
-                    path.append(parent.name)
-                    parent = parent.parent
-                path.reverse()
-                properties['path'] = "/".join(path)
+                # Path
+                with_path = self.get_option('with_path')
+                if with_path:
+                    path = []
+                    parent = vm_obj.obj.parent
+                    while parent:
+                        path.append(parent.name)
+                        parent = parent.parent
+                    path.reverse()
+                    properties['path'] = "/".join(path)
 
-            host_properties = to_nested_dict(properties)
+                host_properties = to_nested_dict(properties)
 
-            # Check if we can add host as per filters
-            host_filters = self.get_option('filters')
-            if not self._can_add_host(host_filters, host_properties, strict=strict):
-                continue
+                # Check if we can add host as per filters
+                host_filters = self.get_option('filters')
+                if not self._can_add_host(host_filters, host_properties, strict=strict):
+                    continue
 
-            host = self._get_hostname(host_properties, hostnames, strict=strict)
+                host = self._get_hostname(host_properties, hostnames, strict=strict)
 
-            if host not in hostvars:
-                hostvars[host] = host_properties
-                self._populate_host_properties(host_properties, host)
-
+                if host not in hostvars:
+                    hostvars[host] = host_properties
+                    self._populate_host_properties(host_properties, host)
+            except vmodl.fault.ManagedObjectNotFound:
+                pass
         return hostvars
 
     def _get_hostname(self, properties, hostnames, strict=False):
